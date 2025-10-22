@@ -124,7 +124,7 @@
 
         // === Raster ===
         async function loadRaster() {
-            const res = await fetch("data/NTL.tif");
+            const res = await fetch("https://pub-ae77ac36016f4866951719d9d19c80f8.r2.dev/NTL1.tif");
             const arrayBuffer = await res.arrayBuffer();
             const georaster = await parseGeoraster(arrayBuffer);
             const rasterLayer = new GeoRasterLayer({
@@ -316,3 +316,4 @@
             hideLoading();
 
         })();
+
