@@ -52,6 +52,9 @@
     const map = L.map("map", {
       center: [-2.5, 118],
       zoom: 5,
+      zoom: 13,
+      zoomSnap: 0.1,   // zoom bisa bergerak 0.1 level
+      zoomDelta: 0.1,  // scroll zoom kecil-kecil
       layers: [baseCarto, kabLayerGroup]
     });
 
@@ -173,17 +176,36 @@
         const legendNTL = L.control({ position: "bottomright" });
 
         legendNTL.onAdd = function (map) {
-          const div = L.DomUtil.create("div", "legend");
-          div.innerHTML = `
-              <h4>Kecerahan NTL</h4>
-              <p>(x 10⁻¹ nWatts/cm²/sr)</p>
-              <div class="gradient-bar"></div>
-              <div class="legend-labels">
-              <span>0</span>
-              <span>>15</span>
-              </div>
-          `;
-          return div;
+            const div = L.DomUtil.create("div");
+
+            // Style untuk div utama (legend)
+            div.style.background = "rgba(255, 255, 255, 0.9)";
+            div.style.padding = "10px 12px";
+            div.style.borderRadius = "8px";
+            div.style.boxShadow = "0 0 8px rgba(0,0,0,0.2)";
+            div.style.fontSize = "13px";
+            div.style.lineHeight = "1.4";
+            div.style.color = "#333";
+
+            // Konten legend
+            div.innerHTML = `
+                <h4 style="margin: 0 0 6px; font-weight: bold; text-align: center;">Kecerahan NTL</h4>
+                <p style="margin:0;">(x 10⁻¹ nWatts/cm²/sr)</p>
+                <div style="
+                    width: 160px; 
+                    height: 12px; 
+                    border-radius: 6px; 
+                    background: linear-gradient(to right, #ff7f00, #e4ff1c); 
+                    margin: 4px 0;"></div>
+                <div style="
+                    display: flex; 
+                    justify-content: space-between; 
+                    font-size: 12px;">
+                    <span>0</span>
+                    <span>>15</span>
+                </div>
+            `;
+            return div;
         };
 
         legendNTL.addTo(map);
