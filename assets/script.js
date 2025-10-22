@@ -123,40 +123,68 @@
     });
 
         // === Raster ===
-        async function loadRaster() {
-            const res = await fetch("https://pub-ae77ac36016f4866951719d9d19c80f8.r2.dev/NTL1.tif");
-            const arrayBuffer = await res.arrayBuffer();
-            const georaster = await parseGeoraster(arrayBuffer);
-            const rasterLayer = new GeoRasterLayer({
-                georaster: georaster,
-                pane: "rasterPane",
-                opacity: 1,
-                resolution: 256,
-                pixelValuesToColorFn: value => getNightLightsColor(value),
-            }).addTo(map);
+        // async function loadRaster() {
+        //     const res = await fetch("data/NTL.tif");
+        //     const arrayBuffer = await res.arrayBuffer();
+        //     const georaster = await parseGeoraster(arrayBuffer);
+        //     const rasterLayer = new GeoRasterLayer({
+        //         georaster: georaster,
+        //         pane: "rasterPane",
+        //         opacity: 1,
+        //         resolution: 256,
+        //         pixelValuesToColorFn: value => getNightLightsColor(value),
+        //     }).addTo(map);
 
-            rasterLayer.addTo(map);
-        }
+        //     rasterLayer.addTo(map);
+        // }
 
-        function getNightLightsColor(value) {
-            if (value <= 0) return null;
-            const min = 0, max = 15; // sesuaikan dengan nilai GeoTIFF Anda
-            const ratio = Math.min((value - min) / (max - min), 1);
+        // function getNightLightsColor(value) {
+        //     if (value <= 0) return null;
+        //     const min = 0, max = 15; // sesuaikan dengan nilai GeoTIFF Anda
+        //     const ratio = Math.min((value - min) / (max - min), 1);
 
-            // Warna awal (#ff7f00) → Warna akhir (#e4ff1c)
-            const start = { r: 255, g: 127, b: 0 };     // #ff7f00
-            const end   = { r: 228, g: 255, b: 28 };    // #e4ff1c
+        //     // Warna awal (#ff7f00) → Warna akhir (#e4ff1c)
+        //     const start = { r: 255, g: 127, b: 0 };     // #ff7f00
+        //     const end   = { r: 228, g: 255, b: 28 };    // #e4ff1c
 
-            // Interpolasi linear antar warna
-            const r = Math.floor(start.r + (end.r - start.r) * ratio);
-            const g = Math.floor(start.g + (end.g - start.g) * ratio);
-            const b = Math.floor(start.b + (end.b - start.b) * ratio);
+        //     // Interpolasi linear antar warna
+        //     const r = Math.floor(start.r + (end.r - start.r) * ratio);
+        //     const g = Math.floor(start.g + (end.g - start.g) * ratio);
+        //     const b = Math.floor(start.b + (end.b - start.b) * ratio);
 
-            // Opsi transparansi lembut (semakin besar nilai, semakin kuat)
-            const alpha = 0.3 + 0.7 * ratio;
+        //     // Opsi transparansi lembut (semakin besar nilai, semakin kuat)
+        //     const alpha = 0.3 + 0.7 * ratio;
 
-            return `rgba(${r},${g},${b},${alpha})`;
-        }
+        //     return `rgba(${r},${g},${b},${alpha})`;
+        // }
+
+
+        const imageBounds = [
+        [-11.0083334214, 94.9708340931],
+        [6.0791667153, 141.0208344615]
+        ];
+        L.imageOverlay("data/NightTimeLight_1.png", imageBounds).addTo(map);
+        map.fitBounds(imageBounds);
+
+
+        // === LEGENDA UNTUK GEOTIFF ===
+        const legend = L.control({ position: "bottomright" });
+
+        legend.onAdd = function (map) {
+        const div = L.DomUtil.create("div", "legend");
+        div.innerHTML = `
+            <h4>Kecerahan NTL</h4>
+            <p>(x 10⁻¹ nWatts cm⁻² sr⁻¹)</p>
+            <div class="gradient-bar"></div>
+            <div class="legend-labels">
+            <span>0</span>
+            <span>>15</span>
+            </div>
+        `;
+        return div;
+        };
+
+        legend.addTo(map);
 
 
         const provCodes = [11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51, 52, 53, 61, 62, 63, 64, 65, 71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96];
@@ -305,7 +333,7 @@
         // === Jalankan semua ===
         (async function () {
             showLoading();
-            await loadRaster();
+            // await loadRaster();
 
             await loadCSVToMap("data/data_SEM.csv", "idProv", provDataMap);   // CSV provinsi
             await loadCSVToMap("data/BPR_Sumut.csv", "idKab", kabDataMap);      // CSV kabupaten
@@ -314,7 +342,4 @@
             mergedProv.forEach(addProvinceLayer);
 
             hideLoading();
-
         })();
-
-
