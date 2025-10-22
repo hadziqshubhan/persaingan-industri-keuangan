@@ -1,35 +1,35 @@
 
-        // Memuat data CSV
-        // let provDataMap = {}; // map dari idProv → data CSV
-        // let kabDataMap = {};  // data kabupaten
+    // Memuat data CSV
+    // let provDataMap = {}; // map dari idProv → data CSV
+    // let kabDataMap = {};  // data kabupaten
 
-        /**
-         * Load CSV ke map berdasarkan primary key
-         * @param {string} url - lokasi file CSV
-         * @param {string} keyField - nama kolom CSV yang jadi key
-         * @param {object} targetMap - object untuk menyimpan data, key=keyField
-         */
-        async function loadCSVToMap(url, keyField, targetMap) {
-            return new Promise((resolve, reject) => {
-                Papa.parse(url, {
-                    download: true,
-                    header: true,
-                    dynamicTyping: true,
-                    complete: function (results) {
-                        results.data.forEach(row => {
-                            if (row[keyField] != null) targetMap[row[keyField]] = row;
-                        });
-                        resolve();
-                    },
-                    error: function (err) { reject(err); }
-                });
+    /**
+     * Load CSV ke map berdasarkan primary key
+     * @param {string} url - lokasi file CSV
+     * @param {string} keyField - nama kolom CSV yang jadi key
+     * @param {object} targetMap - object untuk menyimpan data, key=keyField
+     */
+    async function loadCSVToMap(url, keyField, targetMap) {
+        return new Promise((resolve, reject) => {
+            Papa.parse(url, {
+                download: true,
+                header: true,
+                dynamicTyping: true,
+                complete: function (results) {
+                    results.data.forEach(row => {
+                        if (row[keyField] != null) targetMap[row[keyField]] = row;
+                    });
+                    resolve();
+                },
+                error: function (err) { reject(err); }
             });
-        }
+        });
+    }
 
 
-        // console.log(provDataMap);
+    // console.log(provDataMap);
 
-            let provDataMap = {}, kabDataMap = {};
+    let provDataMap = {}, kabDataMap = {};
     const cacheProv = {}, cacheKab = {};
     const kabLayerGroup = L.layerGroup();
 
@@ -70,7 +70,8 @@
       "Kabupaten Layer": kabLayerGroup
     };
 
-    L.control.layers(baseLayers, overlays).addTo(map);
+    
+    // L.control.layers(baseLayers, overlays).addTo(map);
 
     // === FITUR TOGGLE DRAG-ZOOM ===
     let boxZoomActive = false, boxZoomStart = null, boxZoomRect = null;
@@ -168,23 +169,25 @@
 
 
         // === LEGENDA UNTUK GEOTIFF ===
-        const legend = L.control({ position: "bottomright" });
+        // === LEGENDA UNTUK GEOTIFF ===
+        const legendNTL = L.control({ position: "bottomright" });
 
-        legend.onAdd = function (map) {
-        const div = L.DomUtil.create("div", "legend");
-        div.innerHTML = `
-            <h4>Kecerahan NTL</h4>
-            <p>(x 10⁻¹ nWatts cm⁻² sr⁻¹)</p>
-            <div class="gradient-bar"></div>
-            <div class="legend-labels">
-            <span>0</span>
-            <span>>15</span>
-            </div>
-        `;
-        return div;
+        legendNTL.onAdd = function (map) {
+          const div = L.DomUtil.create("div", "legend");
+          div.innerHTML = `
+              <h4>Kecerahan NTL</h4>
+              <p>(x 10⁻¹ nWatts/cm²/sr)</p>
+              <div class="gradient-bar"></div>
+              <div class="legend-labels">
+              <span>0</span>
+              <span>>15</span>
+              </div>
+          `;
+          return div;
         };
 
-        legend.addTo(map);
+        legendNTL.addTo(map);
+
 
 
         const provCodes = [11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51, 52, 53, 61, 62, 63, 64, 65, 71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96];
@@ -225,23 +228,54 @@
 
         async function mergeProvincesUnion(codes) {
             const merged = {};
+            const mergedProps = {};
+
             for (const code of codes) {
                 const prov = await fetchProvGeoJSON(code);
                 if (!prov) continue;
+
                 let target = code;
                 for (const key in mergeProvCodes) {
                     if (mergeProvCodes[key].includes(code)) target = parseInt(key);
                 }
+
+                // Tangkap properti target (sekali saja)
+                if (!mergedProps[target]) {
+                    const f = prov.geo.features[0];
+                    mergedProps[target] = {
+                        ...f.properties,
+                        Code: target,
+                        Name: f.properties.Name // default, nanti bisa ditimpa
+                    };
+                }
+
                 prov.geo.features.forEach(f => {
                     if (!merged[target]) merged[target] = f;
                     else merged[target] = turf.union(merged[target], f);
                 });
             }
-            return Object.entries(merged).map(([code, feature]) => ({
-                code: parseInt(code),
-                geo: { type: "FeatureCollection", features: [feature] }
-            }));
+
+            // Setelah semua digabung, timpa properties agar sesuai target
+            const mergedFeatures = Object.entries(merged).map(([code, feature]) => {
+                const props = mergedProps[code];
+                feature.properties = { ...feature.properties, ...props };
+                return {
+                    code: parseInt(code),
+                    geo: { type: "FeatureCollection", features: [feature] }
+                };
+            });
+
+            // 🔧 Update cacheProv agar layer lain (choropleth, tooltip, dll) ikut pakai hasil gabungan
+        // 🔧 Kosongkan isi cacheProv tanpa ganti referensinya
+        Object.keys(cacheProv).forEach(k => delete cacheProv[k]);
+        mergedFeatures.forEach(f => {
+            cacheProv[f.code] = f;
+        });
+
+
+            return mergedFeatures;
         }
+
 
         // const kabLayerGroup = L.layerGroup().addTo(map);
         let provTooltips = [];
@@ -295,21 +329,34 @@
                             l.bindPopup(`<b>${nama}</b><br>Kode: ${f.properties.Code}`);
                             l.bindPopup(popupContentkab);
                             l.bindTooltip(nama, { permanent: false, direction: "top", className: "prov-label" });
-                            l.on("mouseover", () => l.setStyle({ color: "#ffff00", weight: 3 }));
+                            l.on("mouseover", () => l.setStyle({ color: "blue", weight: 3 }));
                             l.on("mouseout", () => l.setStyle({ color: "#ff6600", weight: 1 }));
-
+                            
                             // Circle Marker
+                            // === Tambahkan Circle Marker di pinggir polygon ===
                             if (kabCsvData && kabCsvData["Jumlah BPR/BPRS"] != null) {
-                                const center = l.getBounds().getCenter();
+                                const bounds = l.getBounds();
+                                const center = bounds.getCenter();
+
+                                // Geser posisi ke arah timur laut (lat +, lng +)
+                                const offsetLat = (bounds.getNorth() - bounds.getSouth()) * 0.2; // 10% dari tinggi polygon
+                                const offsetLng = (bounds.getEast() - bounds.getWest()) * 0.2;   // 10% dari lebar polygon
+
+                                const adjustedLat = center.lat + offsetLat;
+                                const adjustedLng = center.lng + offsetLng;
+                                const adjustedPoint = L.latLng(adjustedLat, adjustedLng);
+
                                 const radius = Math.sqrt(kabCsvData["Jumlah BPR/BPRS"]) * 10; // skala agar tidak terlalu besar
-                                L.circleMarker(center, {
+
+                                L.circleMarker(adjustedPoint, {
                                     radius: radius,
-                                    fillColor: "red",
-                                    color: "red",
+                                    fillColor: "blue",
+                                    color: "blue",
                                     weight: 1,
                                     fillOpacity: 0.5
                                 }).addTo(kabLayerGroup);
                             }
+
                         }
                     }).addTo(kabLayerGroup);
                 });
@@ -331,15 +378,191 @@
         map.on("zoomend", () => { if (map.getZoom() < 8) kabLayerGroup.clearLayers(); updateTooltipVisibility(); });
 
         // === Jalankan semua ===
-        (async function () {
-            showLoading();
-            // await loadRaster();
+(async function () {
+    showLoading();
+    // await loadRaster();
 
-            await loadCSVToMap("data/data_SEM.csv", "idProv", provDataMap);   // CSV provinsi
-            await loadCSVToMap("data/BPR_Sumut.csv", "idKab", kabDataMap);      // CSV kabupaten
+    await loadCSVToMap("data/data_SEM.csv", "idProv", provDataMap);   // CSV provinsi
+    await loadCSVToMap("data/BPR_Sumut.csv", "idKab", kabDataMap);    // CSV kabupaten
 
-            const mergedProv = await mergeProvincesUnion(provCodes);
-            mergedProv.forEach(addProvinceLayer);
+    const mergedProv = await mergeProvincesUnion(provCodes);
+    mergedProv.forEach(addProvinceLayer);
 
-            hideLoading();
-        })();
+    hideLoading();
+
+
+    // === Buat Choropleth berdasarkan kolom-kolom di data_SEM.csv ===
+    const semChoroplethLayers = {}; // wadah choropleth per kolom
+
+  const colorPalettes = [
+    ["#e4ff1c", "#ff7f00"],  // kuning → oranye
+    ["#66ffcc", "#0066ff"],  // hijau muda → biru
+    ["#ff80ff", "#9b00ff"],  // pink → ungu
+    ["#ccff66", "#00cc00"],  // limau → hijau
+    ["#ffff66", "#ff0000"],  // kuning pucat → merah
+    ["#99ffff", "#0099cc"],  // cyan muda → biru laut
+    ["#ffcccc", "#ff3399"],  // pink muda → magenta
+    ["#ffff99", "#996600"],  // krem → coklat
+    ["#cc99ff", "#6600cc"],  // lavender → ungu tua
+    ["#aaffaa", "#008080"],  // hijau pastel → teal
+  ];
+
+
+    // Helper untuk interpolasi dua warna hex
+  function interpolateColor(hex1, hex2, ratio) {
+      const r1 = parseInt(hex1.substring(1, 3), 16);
+      const g1 = parseInt(hex1.substring(3, 5), 16);
+      const b1 = parseInt(hex1.substring(5, 7), 16);
+      const r2 = parseInt(hex2.substring(1, 3), 16);
+      const g2 = parseInt(hex2.substring(3, 5), 16);
+      const b2 = parseInt(hex2.substring(5, 7), 16);
+
+      const r = Math.round(r1 + (r2 - r1) * ratio);
+      const g = Math.round(g1 + (g2 - g1) * ratio);
+      const b = Math.round(b1 + (b2 - b1) * ratio);
+      return `rgb(${r},${g},${b})`;
+  }
+
+    // === Legenda Dinamis ===
+    // === LEGENDA DINAMIS UNTUK CHOROPLETH ===
+    let legendChoropleth = L.control({ position: "bottomright" });
+
+    const legendContainer = L.DomUtil.create("div", "legend-container");
+    legendContainer.style.display = "flex";
+    legendContainer.style.flexDirection = "column"; // atau row jika mau horizontal
+    legendContainer.style.alignItems = "flex-start"; 
+
+
+    const legendChoroplethDiv = L.DomUtil.create("div", "legendChoropleth");
+
+    legendContainer.appendChild(legendChoroplethDiv);
+
+    // Inline CSS background style
+    legendChoroplethDiv.style.background = "rgba(255, 255, 255, 0.9)";
+    legendChoroplethDiv.style.padding = "10px 12px";
+    legendChoroplethDiv.style.borderRadius = "8px";
+    legendChoroplethDiv.style.boxShadow = "0 0 8px rgba(0, 0, 0, 0.2)";
+    legendChoroplethDiv.style.fontSize = "13px";
+    legendChoroplethDiv.style.lineHeight = "1.4";
+    legendChoroplethDiv.style.color = "#333";
+    legendChoroplethDiv.style.maxWidth = "180px"; // opsional, biar rapi
+    legendChoroplethDiv.style.backdropFilter = "blur(3px)"; // opsional, efek kaca buram
+
+    const legendWrapper = L.control({ position: "bottomright" });
+    legendWrapper.onAdd = function() {
+        return legendContainer;
+    };
+    legendWrapper.addTo(map);
+
+
+
+    legendChoropleth.update = function(props) {
+      if (!props) {
+          legendChoroplethDiv.innerHTML = "";
+          return;
+      }
+      const { title, colorStart, colorEnd, min, max } = props;
+      const steps = 6;
+      const grades = [];
+      for (let i = 0; i <= steps; i++) grades.push(min + (i * (max - min)) / steps);
+
+      let html = `<strong>${title}</strong><br>`;
+      for (let i = 0; i < grades.length - 1; i++) {
+          const c = interpolateColor(colorStart, colorEnd, (i / (steps - 1)));
+          html += `<i style="background:${c};width:20px;height:10px;display:inline-block;margin-right:6px;"></i> 
+                  ${grades[i].toFixed(2)}–${grades[i + 1].toFixed(2)}<br>`;
+      }
+      legendChoroplethDiv.innerHTML = html;
+    };
+
+
+    function showLegend(title, colorStart, colorEnd, min, max) {
+        legendChoropleth.update({ title, colorStart, colorEnd, min, max });
+    }
+
+    function hideLegend() {
+        legendChoropleth.update(null); // kosongkan konten
+    }
+
+
+
+    // === Fungsi Choropleth ===
+    function createChoroplethLayer(columnName, colorStart, colorEnd) {
+        const values = Object.values(provDataMap)
+            .map(d => parseFloat(d[columnName]))
+            .filter(v => !isNaN(v));
+
+        if (values.length === 0) return null;
+
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+
+        const getColor = v => interpolateColor(colorStart, colorEnd, (v - min) / (max - min));
+
+        const layer = L.geoJSON(
+            Object.values(cacheProv)
+                .map(p => p.geo)
+                .reduce((acc, geo) => acc.concat(geo.features), []),
+            {
+                style: feature => {
+                    const code = feature.properties.Code;
+                    const row = provDataMap[code];
+                    const value = row ? parseFloat(row[columnName]) : null;
+                    return {
+                        fillColor: value != null ? getColor(value) : "#ccc",
+                        color: "white",
+                        weight: 1,
+                        fillOpacity: 0.9
+                    };
+                },
+                onEachFeature: (feature, layer) => {
+                    const code = feature.properties.Code;
+                    const row = provDataMap[code];
+                    const value = row ? row[columnName] : "N/A";
+                    layer.bindTooltip(`${feature.properties.Name}<br>${columnName}: ${value}`, {
+                        direction: "top",
+                        offset: [0, -4],
+                        className: "prov-tooltip"
+                    });
+                }
+            }
+        );
+
+        // Tambah event untuk kontrol legendanya
+        map.on("overlayadd", e => {
+            if (e.name === `Choropleth: ${columnName}`) {
+                showLegend(columnName, colorStart, colorEnd, min, max);
+            }
+        });
+
+        map.on("overlayremove", e => {
+            if (e.name === `Choropleth: ${columnName}`) {
+                hideLegend();
+            }
+        });
+
+        return layer;
+    }
+
+    // Ambil kolom numerik dan buat choropleth-nya
+    const sampleRow = Object.values(provDataMap)[0];
+    if (sampleRow) {
+        const columns = Object.keys(sampleRow).filter(k =>
+            !["idProv", "Nama_Prov"].includes(k)
+        );
+
+        columns.forEach((col, i) => {
+            const [start, end] = colorPalettes[i % colorPalettes.length];
+            const layer = createChoroplethLayer(col, start, end);
+            if (layer) {
+                semChoroplethLayers[`Choropleth: ${col}`] = layer;
+                overlays[`Choropleth: ${col}`] = layer;
+            }
+        });
+    }
+
+    // Perbarui kontrol layer agar menampilkan daftar choropleth
+    L.control.layers(baseLayers, overlays, { collapsed: true }).addTo(map);
+    
+
+})();
