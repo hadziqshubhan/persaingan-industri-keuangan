@@ -132,7 +132,7 @@
                 pane: "rasterPane",
                 opacity: 1,
                 resolution: 256,
-                // pixelValuesToColorFn: value => getNightLightsColor(value),
+                pixelValuesToColorFn: value => getNightLightsColor(value),
             }).addTo(map);
 
             rasterLayer.addTo(map);
@@ -316,4 +316,5 @@
             hideLoading();
 
         })();
+
 
