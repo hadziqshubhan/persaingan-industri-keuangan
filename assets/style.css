@@ -137,4 +137,36 @@
                 opacity: 0;
             }
         }
+
+        .legend {
+        background: rgba(255, 255, 255, 0.9);
+        padding: 10px 12px;
+        border-radius: 8px;
+        box-shadow: 0 0 8px rgba(0,0,0,0.2);
+        font-size: 13px;
+        line-height: 1.4;
+        color: #333;
+        }
+
+        .legend h4 {
+        margin: 0 0 6px;
+        font-weight: bold;
+        text-align: center;
+        }
+
+        .gradient-bar {
+        width: 160px;
+        height: 12px;
+        border-radius: 6px;
+        background: linear-gradient(to right, #ff7f00, #e4ff1c);
+        margin: 4px 0;
+        }
+
+        .legend-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        }
+
+
  
