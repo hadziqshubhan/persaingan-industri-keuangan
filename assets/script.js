@@ -1,179 +1,114 @@
+// Optimized WebGIS script (replace original main parts with this)
+// Dependencies: Leaflet, PapaParse, turf
 
-    // Memuat data CSV
-    // let provDataMap = {}; // map dari idProv → data CSV
-    // let kabDataMap = {};  // data kabupaten
+// --- UTILITIES ---
+const byId = id => document.getElementById(id);
+const showLoading = () => { const e = byId('loading-overlay'); if (e) e.style.display = 'flex'; };
+const hideLoading = () => { const e = byId('loading-overlay'); if (e) e.style.display = 'none'; };
+const debounce = (fn, wait=100) => {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(()=>fn(...a), wait); };
+};
 
-    /**
-     * Load CSV ke map berdasarkan primary key
-     * @param {string} url - lokasi file CSV
-     * @param {string} keyField - nama kolom CSV yang jadi key
-     * @param {object} targetMap - object untuk menyimpan data, key=keyField
-     */
-    async function loadCSVToMap(url, keyField, targetMap) {
-        return new Promise((resolve, reject) => {
-            Papa.parse(url, {
-                download: true,
-                header: true,
-                dynamicTyping: true,
-                complete: function (results) {
-                    results.data.forEach(row => {
-                        if (row[keyField] != null) targetMap[row[keyField]] = row;
-                    });
-                    resolve();
-                },
-                error: function (err) { reject(err); }
-            });
-        });
-    }
+// Normalize/parse numeric fields once when loading CSV
+function normalizeRowNumbers(row) {
+  Object.keys(row).forEach(k => {
+    const v = row[k];
+    if (v === '' || v == null) { row[k] = null; return; }
+    // If PapaParse already numeric, keep it. Otherwise try parse
+    if (typeof v === 'number' && !isNaN(v)) return;
+    const n = Number(String(v).replace(/[, ]+/g, '.').replace(/[^0-9.\-]/g, ''));
+    row[k] = isNaN(n) ? row[k] : n;
+  });
+  return row;
+}
 
 
-    // console.log(provDataMap);
 
-    let provDataMap = {}, kabDataMap = {};
-    const cacheProv = {}, cacheKab = {};
-    const kabLayerGroup = L.layerGroup();
-
-    function showLoading() { document.getElementById('loading-overlay').style.display = 'flex'; }
-    function hideLoading() { document.getElementById('loading-overlay').style.display = 'none'; }
-
-    // === MAP DAN BASEMAP ===
-    const baseOSM = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; OSM'
+// Load CSV into map keyed by keyField; parse numbers once
+async function loadCSVToMap(url, keyField, targetMap) {
+  return new Promise((resolve, reject) => {
+    Papa.parse(url, {
+      download: true,
+      header: true,
+      dynamicTyping: false,
+      skipEmptyLines: true,
+      complete: results => {
+        for (const row of results.data) {
+          if (row[keyField] == null) continue;
+          const normalized = normalizeRowNumbers(row);
+          // use numeric key as number if possible
+          const key = isNaN(Number(normalized[keyField])) ? normalized[keyField] : Number(normalized[keyField]);
+          targetMap[key] = normalized;
+        }
+        resolve();
+      },
+      error: err => reject(err)
     });
+  });
+}
 
-    const baseCarto = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: '&copy; CARTO &copy; OSM'
-    });
+// Number formatting helper (fast)
+function formatNumber(value, decimals = 0) {
+  if (value == null || value === '') return '-';
+  if (typeof value !== 'number' || isNaN(value)) return String(value);
+  if (value < 100 && value % 1 !== 0) return value.toFixed(decimals).replace('.', ',');
+  if (value >= 100) return Math.round(value).toLocaleString('id-ID');
+  return value.toString();
+}
 
-    const baseESRI = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-      attribution: '&copy; ESRI'
-    });
+// Color interpolation (returns rgb string)
+function interpolateColor(hex1, hex2, ratio) {
+  const h = s => parseInt(s, 16);
+  const r1 = h(hex1.slice(1,3)), g1 = h(hex1.slice(3,5)), b1 = h(hex1.slice(5,7));
+  const r2 = h(hex2.slice(1,3)), g2 = h(hex2.slice(3,5)), b2 = h(hex2.slice(5,7));
+  const r = Math.round(r1 + (r2 - r1) * ratio);
+  const g = Math.round(g1 + (g2 - g1) * ratio);
+  const b = Math.round(b1 + (b2 - b1) * ratio);
+  return `rgb(${r},${g},${b})`;
+}
 
-    const map = L.map("map", {
-      center: [-2.5, 118],
-      zoom: 5,
-      zoom: 13,
-      zoomSnap: 0.1,   // zoom bisa bergerak 0.1 level
-      zoomDelta: 0.1,  // scroll zoom kecil-kecil
-      layers: [baseCarto, kabLayerGroup]
-    });
+// --- MAP SETUP ---
+const provDataMap = {}, kabDataMap = {};
+const cacheProv = {}, cacheKab = {};
+const kabLayerGroup = L.layerGroup();
+const tooltipLayerGroup = L.layerGroup(); // group untuk tooltip leaflet markers (lebih cepat kontrol)
+let topTooltipPaneCreated = false;
 
-    map.createPane("rasterPane").style.zIndex = 200;
-    map.createPane("vectorPane").style.zIndex = 400;
-    map.createPane("kabPane").style.zIndex = 500;
+const baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM' });
+const baseCarto = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CARTO &copy; OSM' });
+const baseESRI = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: '&copy; ESRI' });
 
-    // === CONTROL UNTUK BASEMAP DAN OVERLAY ===
-    const baseLayers = {
-      "Carto Dark": baseCarto,
-      "OpenStreetMap": baseOSM,
-      "ESRI Satellite": baseESRI
-    };
+const map = L.map('map', {
+  center: [-2.5, 118],
+  zoom: 5,
+  zoomSnap: 0.1,
+  preferCanvas: true,
+  zoomDelta: 0.1,
+  layers: [baseCarto, kabLayerGroup]
+});
 
-    const overlays = {
-      "Kabupaten Layer": kabLayerGroup
-    };
+map.createPane('rasterPane').style.zIndex = 200;
+map.createPane('vectorPane').style.zIndex = 400;
+map.createPane('kabPane').style.zIndex = 500;
 
-    
-    // L.control.layers(baseLayers, overlays).addTo(map);
+// create topTooltipPane once
+if (!topTooltipPaneCreated) {
+  map.createPane('topTooltipPane');
+  map.getPane('topTooltipPane').style.zIndex = 650;
+  topTooltipPaneCreated = true;
+}
 
-    // === FITUR TOGGLE DRAG-ZOOM ===
-    let boxZoomActive = false, boxZoomStart = null, boxZoomRect = null;
+// baselayers & overlays placeholder
+const baseLayers = { 'None': L.layerGroup(), 'Carto Dark': baseCarto, 'OpenStreetMap': baseOSM, 'ESRI Satellite': baseESRI };
+const overlays = { 'Kabupaten Layer': kabLayerGroup };
 
-    function toggleBoxZoom() {
-      boxZoomActive = !boxZoomActive;
-      button.textContent = boxZoomActive ? "🟢 Drag-Zoom Aktif" : "🔲 Drag-Zoom";
-      if (!boxZoomActive && boxZoomRect) {
-        map.removeLayer(boxZoomRect);
-        boxZoomRect = null;
-      }
-    }
+// NightTime image overlay (kecepatan: imageOverlay cepat dibandingkan raster parsing di client)
+const imageBounds = [[-11.0083334214, 94.9708340931],[6.0791667153, 141.0208344615]];
+L.imageOverlay('data/NightTimeLight_1.png', imageBounds, { pane: 'rasterPane' }).addTo(map);
+map.fitBounds(imageBounds);
 
-    const ZoomToggle = L.Control.extend({
-      onAdd: function () {
-        const div = L.DomUtil.create("div", "leaflet-control-custom");
-        div.textContent = "🔲 Drag-Zoom";
-        div.onclick = toggleBoxZoom;
-        L.DomEvent.disableClickPropagation(div);
-        button = div;
-        return div;
-      }
-    });
-
-    new ZoomToggle({ position: "topright" }).addTo(map);
-
-    map.on('mousedown', function (e) {
-      if (!boxZoomActive) return;
-      boxZoomStart = e.latlng;
-      map.dragging.disable();
-    });
-
-    map.on('mousemove', function (e) {
-      if (!boxZoomActive || !boxZoomStart) return;
-      const bounds = L.latLngBounds(boxZoomStart, e.latlng);
-      if (boxZoomRect) boxZoomRect.setBounds(bounds);
-      else boxZoomRect = L.rectangle(bounds, { color: '#007bff', weight: 1, dashArray: '4', fillOpacity: 0.1 }).addTo(map);
-    });
-
-    map.on('mouseup', function (e) {
-      if (!boxZoomActive || !boxZoomStart) return;
-      const bounds = L.latLngBounds(boxZoomStart, e.latlng);
-      if (boxZoomRect) {
-        map.fitBounds(bounds);
-        map.removeLayer(boxZoomRect);
-        boxZoomRect = null;
-      }
-      boxZoomStart = null;
-      map.dragging.enable();
-    });
-
-        // === Raster ===
-        // async function loadRaster() {
-        //     const res = await fetch("data/NTL.tif");
-        //     const arrayBuffer = await res.arrayBuffer();
-        //     const georaster = await parseGeoraster(arrayBuffer);
-        //     const rasterLayer = new GeoRasterLayer({
-        //         georaster: georaster,
-        //         pane: "rasterPane",
-        //         opacity: 1,
-        //         resolution: 256,
-        //         pixelValuesToColorFn: value => getNightLightsColor(value),
-        //     }).addTo(map);
-
-        //     rasterLayer.addTo(map);
-        // }
-
-        // function getNightLightsColor(value) {
-        //     if (value <= 0) return null;
-        //     const min = 0, max = 15; // sesuaikan dengan nilai GeoTIFF Anda
-        //     const ratio = Math.min((value - min) / (max - min), 1);
-
-        //     // Warna awal (#ff7f00) → Warna akhir (#e4ff1c)
-        //     const start = { r: 255, g: 127, b: 0 };     // #ff7f00
-        //     const end   = { r: 228, g: 255, b: 28 };    // #e4ff1c
-
-        //     // Interpolasi linear antar warna
-        //     const r = Math.floor(start.r + (end.r - start.r) * ratio);
-        //     const g = Math.floor(start.g + (end.g - start.g) * ratio);
-        //     const b = Math.floor(start.b + (end.b - start.b) * ratio);
-
-        //     // Opsi transparansi lembut (semakin besar nilai, semakin kuat)
-        //     const alpha = 0.3 + 0.7 * ratio;
-
-        //     return `rgba(${r},${g},${b},${alpha})`;
-        // }
-
-
-        const imageBounds = [
-        [-11.0083334214, 94.9708340931],
-        [6.0791667153, 141.0208344615]
-        ];
-        L.imageOverlay("data/NightTimeLight_1.png", imageBounds).addTo(map);
-        map.fitBounds(imageBounds);
-
-
-        // === LEGENDA UNTUK GEOTIFF ===
-        // === LEGENDA UNTUK GEOTIFF ===
-        const legendNTL = L.control({ position: "bottomright" });
+// --- GEOJSON FETCHING WITH CACHE + PARALLEL ---
+const legendNTL = L.control({ position: "bottomright" });
 
         legendNTL.onAdd = function (map) {
             const div = L.DomUtil.create("div");
@@ -210,381 +145,300 @@
 
         legendNTL.addTo(map);
 
-
-
-        const provCodes = [11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51, 52, 53, 61, 62, 63, 64, 65, 71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96];
+const provCodes = [11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51, 52, 53, 61, 62, 63, 64, 65, 71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96];
         const kabCodes = [1201, 1202, 1203, 1204, 1205, 1206, 1207, 1208, 1209, 1210, 1211, 1212, 1213, 1214, 1215, 1216, 1217, 1218, 1219, 1220, 1221, 1222, 1223, 1224, 1225, 1271, 1272, 1273, 1274, 1275, 1276, 1277, 1278];
 
-        // const cacheProv = {}, cacheKab = {};
+async function fetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
 
-        async function fetchProvGeoJSON(code) {
-            if (cacheProv[code]) return cacheProv[code];
-            try {
-                const res = await fetch(`https://whatsproject.my.id/geo/v1/prov/${code}/map`);
-                const json = await res.json();
-                const geo = json.provFeature?.provFeature || json.provFeature || json;
-                if (geo && geo.type === "FeatureCollection") {
-                    cacheProv[code] = { code, geo };
-                    return cacheProv[code];
-                }
-                return null;
-            } catch (e) { console.warn(`Gagal memuat provinsi ${code}`, e); return null; }
-        }
+async function fetchProvGeoJSON(code) {
+  if (cacheProv[code]) return cacheProv[code];
+  try {
+    const json = await fetchJson(`https://whatsproject.my.id/geo/v1/prov/${code}/map`);
+    const geo = json.provFeature?.provFeature || json.provFeature || json;
+    if (geo && geo.type === 'FeatureCollection') {
+      cacheProv[code] = { code, geo };
+      return cacheProv[code];
+    }
+  } catch (e) { console.warn('Gagal memuat provinsi', code, e); }
+  return null;
+}
 
-        async function fetchKabGeoJSON(code) {
-            if (cacheKab[code]) return cacheKab[code];
-            try {
-                const res = await fetch(`https://whatsproject.my.id/geo/v1/city/${code}/map`);
-                const json = await res.json();
-                const geo = json.cityFeature?.cityFeature || json.cityFeature || json;
-                if (geo && geo.type === "FeatureCollection") {
-                    cacheKab[code] = { code, geo };
-                    return cacheKab[code];
-                }
-                return null;
-            } catch (e) { console.warn(`Gagal memuat kabupaten ${code}`, e); return null; }
-        }
+async function fetchKabGeoJSON(code) {
+  if (cacheKab[code]) return cacheKab[code];
+  try {
+    const json = await fetchJson(`https://whatsproject.my.id/geo/v1/city/${code}/map`);
+    const geo = json.cityFeature?.cityFeature || json.cityFeature || json;
+    if (geo && geo.type === 'FeatureCollection') {
+      cacheKab[code] = { code, geo };
+      return cacheKab[code];
+    }
+  } catch (e) { console.warn('Gagal memuat kabupaten', code, e); }
+  return null;
+}
 
-        // === Merge & Union Provinsi ===
-        const mergeProvCodes = { 92: [92, 96], 91: [91, 93, 94, 95] };
+// --- MERGE / UNION (GROUPED PROVINCES) ---
+// mergeProvCodes mendefinisikan target grouping
+const mergeProvCodes = { 92: [92, 96], 91: [91, 93, 94, 95] };
 
-        async function mergeProvincesUnion(codes) {
-            const merged = {};
-            const mergedProps = {};
+async function mergeProvincesUnion(codes) {
+  // fetch all prov concurrently
+  const promises = codes.map(c => fetchProvGeoJSON(c));
+  const results = await Promise.all(promises);
+  const merged = {};
+  const mergedProps = {};
 
-            for (const code of codes) {
-                const prov = await fetchProvGeoJSON(code);
-                if (!prov) continue;
-
-                let target = code;
-                for (const key in mergeProvCodes) {
-                    if (mergeProvCodes[key].includes(code)) target = parseInt(key);
-                }
-
-                // Tangkap properti target (sekali saja)
-                if (!mergedProps[target]) {
-                    const f = prov.geo.features[0];
-                    mergedProps[target] = {
-                        ...f.properties,
-                        Code: target,
-                        Name: f.properties.Name // default, nanti bisa ditimpa
-                    };
-                }
-
-                prov.geo.features.forEach(f => {
-                    if (!merged[target]) merged[target] = f;
-                    else merged[target] = turf.union(merged[target], f);
-                });
-            }
-
-            // Setelah semua digabung, timpa properties agar sesuai target
-            const mergedFeatures = Object.entries(merged).map(([code, feature]) => {
-                const props = mergedProps[code];
-                feature.properties = { ...feature.properties, ...props };
-                return {
-                    code: parseInt(code),
-                    geo: { type: "FeatureCollection", features: [feature] }
-                };
-            });
-
-            // 🔧 Update cacheProv agar layer lain (choropleth, tooltip, dll) ikut pakai hasil gabungan
-        // 🔧 Kosongkan isi cacheProv tanpa ganti referensinya
-        Object.keys(cacheProv).forEach(k => delete cacheProv[k]);
-        mergedFeatures.forEach(f => {
-            cacheProv[f.code] = f;
-        });
-
-
-            return mergedFeatures;
-        }
-
-
-        // const kabLayerGroup = L.layerGroup().addTo(map);
-        let provTooltips = [];
-
-        function addProvinceLayer({ code, geo }) {
-            const defaultStyle = { color: '#00bfff', weight: 1, fillOpacity: 0 };
-            const highlightStyle = { color: '#ffff00', weight: 3, fillOpacity: 0.2 };
-
-            const bounds = L.geoJSON(geo).getBounds();
-            const center = bounds.getCenter();
-
-            const layer = L.geoJSON(geo, { pane: "vectorPane", style: defaultStyle }).addTo(map);
-
-            // Ambil data CSV
-            const csvData = provDataMap[code];
-            const nama = geo.features[0].properties?.Name || `Provinsi ${code}`;
-            const popupContent = csvData
-                ? `<b>${nama}</b><br>Non Performance Loan: ${csvData.NPL}<br>jumlah BPR/S: ${csvData["BPR/S"]}<br>jumlah Usaha Menengah: ${csvData.UM}<br>jumlah Usaha Kecil: ${csvData.UK}<br>Indeks Penetrasi Internet: ${csvData["PENETRASI"]}`
-                : `<b>${nama}</b><br>Data CSV tidak tersedia`;
-
-            layer.bindPopup(popupContent);
-
-            const tooltip = L.tooltip({ permanent: true, direction: "center", className: "prov-label" })
-                .setContent(nama)
-                .setLatLng(center);
-            provTooltips.push(tooltip);
-            map.addLayer(tooltip);
-
-            layer.on("mouseover", () => layer.setStyle(highlightStyle));
-            layer.on("mouseout", () => layer.setStyle(defaultStyle));
-
-
-
-            layer.on("dblclick", async (e) => {
-                L.DomEvent.stopPropagation(e); L.DomEvent.preventDefault(e);
-                map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 9 });
-                kabLayerGroup.clearLayers();
-                showLoading();
-                const kabResults = await Promise.all(kabCodes.map(fetchKabGeoJSON));
-                kabResults.filter(r => r).forEach(({ code, geo }) => {
-                    L.geoJSON(geo, {
-                        pane: "kabPane",
-                        style: { color: "#ff6600", weight: 1, fillOpacity: 0 },
-                        onEachFeature: (f, l) => {
-                            const nama = f.properties?.Name || `Kabupaten ${code}`;
-                            const kabCsvData = kabDataMap[code];  // kabCode dari GeoJSON
-                            const popupContentkab = kabCsvData
-                                ? `<b>${nama}</b><br>Jumlah BPR/S: ${kabCsvData["Jumlah BPR/BPRS"]}`
-                                : `<b>${nama}</b><br>-`;
-
-                            l.bindPopup(`<b>${nama}</b><br>Kode: ${f.properties.Code}`);
-                            l.bindPopup(popupContentkab);
-                            l.bindTooltip(nama, { permanent: false, direction: "top", className: "prov-label" });
-                            l.on("mouseover", () => l.setStyle({ color: "blue", weight: 3 }));
-                            l.on("mouseout", () => l.setStyle({ color: "#ff6600", weight: 1 }));
-                            
-                            // Circle Marker
-                            // === Tambahkan Circle Marker di pinggir polygon ===
-                            if (kabCsvData && kabCsvData["Jumlah BPR/BPRS"] != null) {
-                                const bounds = l.getBounds();
-                                const center = bounds.getCenter();
-
-                                // Geser posisi ke arah timur laut (lat +, lng +)
-                                const offsetLat = (bounds.getNorth() - bounds.getSouth()) * 0.2; // 10% dari tinggi polygon
-                                const offsetLng = (bounds.getEast() - bounds.getWest()) * 0.2;   // 10% dari lebar polygon
-
-                                const adjustedLat = center.lat + offsetLat;
-                                const adjustedLng = center.lng + offsetLng;
-                                const adjustedPoint = L.latLng(adjustedLat, adjustedLng);
-
-                                const radius = Math.sqrt(kabCsvData["Jumlah BPR/BPRS"]) * 10; // skala agar tidak terlalu besar
-
-                                L.circleMarker(adjustedPoint, {
-                                    radius: radius,
-                                    fillColor: "blue",
-                                    color: "blue",
-                                    weight: 1,
-                                    fillOpacity: 0.5
-                                }).addTo(kabLayerGroup);
-                            }
-
-                        }
-                    }).addTo(kabLayerGroup);
-                });
-                hideLoading();
-            });
-        }
-
-        function updateTooltipVisibility() {
-            const zoom = map.getZoom();
-            provTooltips.forEach(t => {
-                const pos = map.latLngToContainerPoint(t.getLatLng());
-                const isInViewport = pos.x > 0 && pos.y > 0 && pos.x < window.innerWidth && pos.y < window.innerHeight;
-                if (zoom < 6 || !isInViewport) map.removeLayer(t);
-                else if (!map.hasLayer(t)) map.addLayer(t);
-            });
-        }
-
-        map.on("moveend zoomend", updateTooltipVisibility);
-        map.on("zoomend", () => { if (map.getZoom() < 8) kabLayerGroup.clearLayers(); updateTooltipVisibility(); });
-
-        // === Jalankan semua ===
-(async function () {
-    showLoading();
-    // await loadRaster();
-
-    await loadCSVToMap("data/data_SEM.csv", "idProv", provDataMap);   // CSV provinsi
-    await loadCSVToMap("data/BPR_Sumut.csv", "idKab", kabDataMap);    // CSV kabupaten
-
-    const mergedProv = await mergeProvincesUnion(provCodes);
-    mergedProv.forEach(addProvinceLayer);
-
-    hideLoading();
-
-
-    // === Buat Choropleth berdasarkan kolom-kolom di data_SEM.csv ===
-    const semChoroplethLayers = {}; // wadah choropleth per kolom
-
-  const colorPalettes = [
-    ["#e4ff1c", "#ff7f00"],  // kuning → oranye
-    ["#66ffcc", "#0066ff"],  // hijau muda → biru
-    ["#ff80ff", "#9b00ff"],  // pink → ungu
-    ["#ccff66", "#00cc00"],  // limau → hijau
-    ["#ffff66", "#ff0000"],  // kuning pucat → merah
-    ["#99ffff", "#0099cc"],  // cyan muda → biru laut
-    ["#ffcccc", "#ff3399"],  // pink muda → magenta
-    ["#ffff99", "#996600"],  // krem → coklat
-    ["#cc99ff", "#6600cc"],  // lavender → ungu tua
-    ["#aaffaa", "#008080"],  // hijau pastel → teal
-  ];
-
-
-    // Helper untuk interpolasi dua warna hex
-  function interpolateColor(hex1, hex2, ratio) {
-      const r1 = parseInt(hex1.substring(1, 3), 16);
-      const g1 = parseInt(hex1.substring(3, 5), 16);
-      const b1 = parseInt(hex1.substring(5, 7), 16);
-      const r2 = parseInt(hex2.substring(1, 3), 16);
-      const g2 = parseInt(hex2.substring(3, 5), 16);
-      const b2 = parseInt(hex2.substring(5, 7), 16);
-
-      const r = Math.round(r1 + (r2 - r1) * ratio);
-      const g = Math.round(g1 + (g2 - g1) * ratio);
-      const b = Math.round(b1 + (b2 - b1) * ratio);
-      return `rgb(${r},${g},${b})`;
+  for (const item of results) {
+    if (!item) continue;
+    const code = item.code;
+    let target = code;
+    for (const key in mergeProvCodes) {
+      if (mergeProvCodes[key].includes(code)) { target = Number(key); break; }
+    }
+    // use feature-by-feature union
+    for (const f of item.geo.features) {
+      if (!merged[target]) merged[target] = f;
+      else merged[target] = turf.union(merged[target], f);
+    }
+    // store props once
+    if (!mergedProps[target]) {
+      const f0 = item.geo.features[0];
+      mergedProps[target] = { ...f0.properties, Code: target, Name: f0.properties.Name };
+    }
   }
 
-    // === Legenda Dinamis ===
-    // === LEGENDA DINAMIS UNTUK CHOROPLETH ===
-    let legendChoropleth = L.control({ position: "bottomright" });
+  // update cacheProv atomically
+  Object.keys(cacheProv).forEach(k => delete cacheProv[k]);
+  const mergedFeatures = [];
+  for (const [codeStr, feat] of Object.entries(merged)) {
+    const code = Number(codeStr);
+    feat.properties = { ...feat.properties, ...mergedProps[code] };
+    const fc = { type: 'FeatureCollection', features: [feat] };
+    cacheProv[code] = { code, geo: fc };
+    mergedFeatures.push({ code, geo: fc });
+  }
+  return mergedFeatures;
+}
 
-    const legendContainer = L.DomUtil.create("div", "legend-container");
-    legendContainer.style.display = "flex";
-    legendContainer.style.flexDirection = "column"; // atau row jika mau horizontal
-    legendContainer.style.alignItems = "flex-start"; 
+// --- PROVINCE LAYERS & TOOLTIPS ---
+// store combined features list for choropleth creation later
+let combinedProvFeatures = [];
 
+function addProvinceLayer({ code, geo }) {
+  const defaultStyle = { color: '#00bfff', weight: 1, fillOpacity: 0 };
+  const highlightStyle = { color: '#ffff00', weight: 3, fillOpacity: 0.2 };
 
-    const legendChoroplethDiv = L.DomUtil.create("div", "legendChoropleth");
+  const layer = L.geoJSON(geo, { pane: 'vectorPane', style: defaultStyle }).addTo(map);
 
-    legendContainer.appendChild(legendChoroplethDiv);
+  // popup content using provDataMap (values already normalized)
+  const csvData = provDataMap[code];
+  const name = geo.features[0].properties?.Name || `Provinsi ${code}`;
+  const popupContent = csvData ? `
+    <div style="font-family:Segoe UI, sans-serif; font-size:13px; color:#333">
+      <div style="font-weight:600; font-size:14px; margin-bottom:6px">${name}</div>
+      <table style="width:100%; border-collapse:collapse">
+        <tr><td>PDRB (dalam ribuan)</td><td style="text-align:right">${formatNumber(csvData["PDRB (dalam ribuan)"])}</td></tr>
+        <tr><td>Non Performing Loan</td><td style="text-align:right">${formatNumber(csvData["Non Perform Loan (persen)"],2)}</td></tr>
+        <tr><td>Jumlah BPR/S</td><td style="text-align:right">${formatNumber(csvData["Jumlah BPR/S"])}</td></tr>
+        <tr><td>Usaha Menengah</td><td style="text-align:right">${formatNumber(csvData["Jumlah Usaha Menengah"])}</td></tr>
+        <tr><td>Usaha Kecil</td><td style="text-align:right">${formatNumber(csvData["Jumlah Usaha Kecil"])}</td></tr>
+        <tr><td>Penetrasi Internet</td><td style="text-align:right">${formatNumber(csvData["Tingkat Penetrasi Internet (Persen)"],2)}</td></tr>
+      </table>
+    </div>
+  ` : `<b>${name}</b><br><i>Data CSV tidak tersedia</i>`;
 
-    // Inline CSS background style
-    legendChoroplethDiv.style.background = "rgba(255, 255, 255, 0.9)";
-    legendChoroplethDiv.style.padding = "10px 12px";
-    legendChoroplethDiv.style.borderRadius = "8px";
-    legendChoroplethDiv.style.boxShadow = "0 0 8px rgba(0, 0, 0, 0.2)";
-    legendChoroplethDiv.style.fontSize = "13px";
-    legendChoroplethDiv.style.lineHeight = "1.4";
-    legendChoroplethDiv.style.color = "#333";
-    legendChoroplethDiv.style.maxWidth = "180px"; // opsional, biar rapi
-    legendChoroplethDiv.style.backdropFilter = "blur(3px)"; // opsional, efek kaca buram
+  layer.bindPopup(popupContent);
 
-    const legendWrapper = L.control({ position: "bottomright" });
-    legendWrapper.onAdd = function() {
-        return legendContainer;
-    };
-    legendWrapper.addTo(map);
+  // center label as a lightweight marker (faster than permanent tooltip layers)
+  const bounds = L.geoJSON(geo).getBounds();
+  const center = bounds.getCenter();
+  const label = L.marker(center, {
+    pane: 'topTooltipPane',
+    icon: L.divIcon({ className: 'prov-label', html: `<div>${name}</div>`, iconSize: [100, 24] }),
+    interactive: false
+  });
+  tooltipLayerGroup.addLayer(label);
 
+  // interactions
+  layer.on('mouseover', () => layer.setStyle(highlightStyle));
+  layer.on('mouseout', () => layer.setStyle(defaultStyle));
+  layer.on('dblclick', async e => {
+    L.DomEvent.stopPropagation(e);
+    L.DomEvent.preventDefault(e);
+    map.fitBounds(layer.getBounds(), { padding:[20,20], maxZoom: 9 });
+    kabLayerGroup.clearLayers();
+    showLoading();
+    // fetch kab only when needed: fetch all kab once, reuse cache
+    const kabResults = await Promise.all(kabCodes.map(fetchKabGeoJSON));
+    for (const r of kabResults) {
+      if (!r) continue;
+      L.geoJSON(r.geo, {
+        pane: 'kabPane',
+        style: { color: '#ff6600', weight: 1, fillOpacity: 0 },
+        onEachFeature: (f, l) => {
+          const nameK = f.properties?.Name || `Kabupaten ${r.code}`;
+          const kabCsvData = kabDataMap[f.properties?.Code || r.code];
+          const popupK = kabCsvData ? `<b>${nameK}</b><br>Jumlah BPR/S: ${formatNumber(kabCsvData["Jumlah BPR/BPRS"])}` : `<b>${nameK}</b><br>-`;
+          l.bindPopup(popupK);
+          l.bindTooltip(nameK, { direction: 'top', className: 'prov-label' });
+          l.on('mouseover', () => l.setStyle({ color: 'blue', weight: 3 }));
+          l.on('mouseout', () => l.setStyle({ color: '#ff6600', weight: 1 }));
 
-
-    legendChoropleth.update = function(props) {
-      if (!props) {
-          legendChoroplethDiv.innerHTML = "";
-          return;
-      }
-      const { title, colorStart, colorEnd, min, max } = props;
-      const steps = 6;
-      const grades = [];
-      for (let i = 0; i <= steps; i++) grades.push(min + (i * (max - min)) / steps);
-
-      let html = `<strong>${title}</strong><br>`;
-      for (let i = 0; i < grades.length - 1; i++) {
-          const c = interpolateColor(colorStart, colorEnd, (i / (steps - 1)));
-          html += `<i style="background:${c};width:20px;height:10px;display:inline-block;margin-right:6px;"></i> 
-                  ${grades[i].toFixed(2)}–${grades[i + 1].toFixed(2)}<br>`;
-      }
-      legendChoroplethDiv.innerHTML = html;
-    };
-
-
-    function showLegend(title, colorStart, colorEnd, min, max) {
-        legendChoropleth.update({ title, colorStart, colorEnd, min, max });
+          // circle marker scaled
+          if (kabCsvData && kabCsvData["Jumlah BPR/BPRS"] != null) {
+            const b = l.getBounds();
+            const c = b.getCenter();
+            const offsetLat = (b.getNorth() - b.getSouth()) * 0.2;
+            const offsetLng = (b.getEast() - b.getWest()) * 0.2;
+            const adjusted = L.latLng(c.lat + offsetLat, c.lng + offsetLng);
+            const radius = Math.sqrt(kabCsvData["Jumlah BPR/BPRS"]) * 10;
+            L.circleMarker(adjusted, { radius, fillColor: 'blue', color: 'blue', weight:1, fillOpacity:0.5 }).addTo(kabLayerGroup);
+          }
+        }
+      }).addTo(kabLayerGroup);
     }
+    hideLoading();
+  });
 
-    function hideLegend() {
-        legendChoropleth.update(null); // kosongkan konten
+  // store features for choropleth creation
+  combinedProvFeatures.push(...geo.features);
+}
+
+// --- TOOLTIP VISIBILITY (debounced) ---
+const updateTooltipVisibility = debounce(() => {
+  const z = map.getZoom();
+  if (z < 6) {
+    if (map.hasLayer(tooltipLayerGroup)) map.removeLayer(tooltipLayerGroup);
+  } else {
+    if (!map.hasLayer(tooltipLayerGroup)) map.addLayer(tooltipLayerGroup);
+  }
+}, 120);
+
+map.on('moveend zoomend', updateTooltipVisibility);
+map.on('zoomend', () => { if (map.getZoom() < 8) kabLayerGroup.clearLayers(); updateTooltipVisibility(); });
+
+// --- CHOROPLETH (single global legend handling) ---
+const colorPalettes = [
+  ['#e4ff1c','#ff7f00'],
+  ['#66ffcc','#0066ff'],
+  ['#ff80ff','#9b00ff'],
+  ['#ccff66','#00cc00'],
+  ['#ffff66','#ff0000'],
+  ['#ffcccc','#ff3399'],
+  ['#ffff99','#996600'],
+  ['#cc99ff','#6600cc'],
+  ['#aaffaa','#008080']
+];
+
+// legend container (single control)
+const legendDiv = L.DomUtil.create('div', 'legend-choropleth');
+Object.assign(legendDiv.style, {
+  background: 'rgba(255,255,255,0.95)', padding: '8px 10px', borderRadius:'8px', fontSize:'13px', boxShadow:'0 0 8px rgba(0,0,0,0.15)'
+});
+const legendControl = L.control({ position: 'bottomright' });
+legendControl.onAdd = () => legendDiv;
+legendControl.addTo(map);
+
+function updateLegend({ title, start, end, min, max } = {}) {
+  if (!title) { legendDiv.innerHTML = ''; return; }
+  const steps = 4;
+  const grades = Array.from({length: steps+1}, (_,i) => min + i*(max-min)/steps);
+  let html = `<strong>${title}</strong><br/>`;
+  for (let i=0;i<grades.length-1;i++) {
+    const c = interpolateColor(start, end, i/(steps-1 || 1));
+    html += `<i style="background:${c};width:20px;height:10px;display:inline-block;margin-right:6px;"></i> ${formatNumber(grades[i])} – ${formatNumber(grades[i+1])}<br/>`;
+  }
+  legendDiv.innerHTML = html;
+}
+
+function createChoroplethLayer(columnName, startColor, endColor) {
+  // collect numeric values
+  const vals = [];
+  const codeIndex = {}; // map feature -> code
+  for (const f of combinedProvFeatures) {
+    const code = f.properties?.Code;
+    const row = provDataMap[code];
+    const v = row && row[columnName] != null ? Number(row[columnName]) : null;
+    if (v != null && !isNaN(v)) vals.push(v);
+  }
+  if (vals.length === 0) return null;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const getColor = v => interpolateColor(startColor, endColor, (v - min) / (max - min));
+
+  const geoJson = L.geoJSON({ type: 'FeatureCollection', features: combinedProvFeatures }, {
+    style: feature => {
+      const code = feature.properties?.Code;
+      const row = provDataMap[code];
+      const v = row && row[columnName] != null ? Number(row[columnName]) : null;
+      return { fillColor: v != null ? getColor(v) : '#ccc', color: 'white', weight: 1, fillOpacity: 1 };
+    },
+    onEachFeature: (feature, layer) => {
+      const code = feature.properties?.Code;
+      const row = provDataMap[code];
+      const val = row && row[columnName] != null ? row[columnName] : 'N/A';
+      layer.bindTooltip(`${feature.properties.Name}<br>${columnName}: ${val}`, { direction:'top', offset:[0,-4], className:'prov-tooltip' });
     }
+  });
 
+  // return layer but legend handling global: overlay name will be used by layer control event listeners
+  geoJson._choroplethMeta = { columnName, startColor, endColor, min, max };
+  return geoJson;
+}
 
+// One-time overlayadd/overlayremove listener to manage choropleth legend
+map.on('overlayadd', e => {
+  const layer = e.layer;
+  if (layer && layer._choroplethMeta) {
+    const m = layer._choroplethMeta;
+    updateLegend({ title: m.columnName, start: m.startColor, end: m.endColor, min: m.min, max: m.max });
+  }
+});
+map.on('overlayremove', e => {
+  const layer = e.layer;
+  if (layer && layer._choroplethMeta) updateLegend(null);
+});
 
-    // === Fungsi Choropleth ===
-    function createChoroplethLayer(columnName, colorStart, colorEnd) {
-        const values = Object.values(provDataMap)
-            .map(d => parseFloat(d[columnName]))
-            .filter(v => !isNaN(v));
+// --- MAIN BOOTSTRAP ---
 
-        if (values.length === 0) return null;
+(async function init() {
+  showLoading();
+  try {
+    await Promise.all([
+      loadCSVToMap('data/data_SEM.csv', 'idProv', provDataMap),
+      loadCSVToMap('data/BPR_Sumut.csv', 'idKab', kabDataMap)
+    ]);
 
-        const min = Math.min(...values);
-        const max = Math.max(...values);
+    // Merge provinces and add layers
+    const merged = await mergeProvincesUnion(provCodes);
+    merged.forEach(addProvinceLayer);
 
-        const getColor = v => interpolateColor(colorStart, colorEnd, (v - min) / (max - min));
+    // add tooltip layer group (initial visibility handled by updateTooltipVisibility)
+    tooltipLayerGroup.addTo(map);
+    updateTooltipVisibility();
 
-        const layer = L.geoJSON(
-            Object.values(cacheProv)
-                .map(p => p.geo)
-                .reduce((acc, geo) => acc.concat(geo.features), []),
-            {
-                style: feature => {
-                    const code = feature.properties.Code;
-                    const row = provDataMap[code];
-                    const value = row ? parseFloat(row[columnName]) : null;
-                    return {
-                        fillColor: value != null ? getColor(value) : "#ccc",
-                        color: "white",
-                        weight: 1,
-                        fillOpacity: 0.9
-                    };
-                },
-                onEachFeature: (feature, layer) => {
-                    const code = feature.properties.Code;
-                    const row = provDataMap[code];
-                    const value = row ? row[columnName] : "N/A";
-                    layer.bindTooltip(`${feature.properties.Name}<br>${columnName}: ${value}`, {
-                        direction: "top",
-                        offset: [0, -4],
-                        className: "prov-tooltip"
-                    });
-                }
-            }
-        );
-
-        // Tambah event untuk kontrol legendanya
-        map.on("overlayadd", e => {
-            if (e.name === `Choropleth: ${columnName}`) {
-                showLegend(columnName, colorStart, colorEnd, min, max);
-            }
-        });
-
-        map.on("overlayremove", e => {
-            if (e.name === `Choropleth: ${columnName}`) {
-                hideLegend();
-            }
-        });
-
-        return layer;
-    }
-
-    // Ambil kolom numerik dan buat choropleth-nya
+    // Build choropleths
     const sampleRow = Object.values(provDataMap)[0];
     if (sampleRow) {
-        const columns = Object.keys(sampleRow).filter(k =>
-            !["idProv", "Nama_Prov"].includes(k)
-        );
-
-        columns.forEach((col, i) => {
-            const [start, end] = colorPalettes[i % colorPalettes.length];
-            const layer = createChoroplethLayer(col, start, end);
-            if (layer) {
-                semChoroplethLayers[`Choropleth: ${col}`] = layer;
-                overlays[`Choropleth: ${col}`] = layer;
-            }
-        });
+      const columns = Object.keys(sampleRow).filter(k => !['idProv','Nama_Prov'].includes(k));
+      columns.forEach((col, i) => {
+        const [start,end] = colorPalettes[i % colorPalettes.length];
+        const layer = createChoroplethLayer(col, start, end);
+        if (layer) {
+          const name = `Choropleth: ${col}`;
+          overlays[name] = layer;
+        }
+      });
     }
 
-    // Perbarui kontrol layer agar menampilkan daftar choropleth
     L.control.layers(baseLayers, overlays, { collapsed: true }).addTo(map);
-    
 
+  } catch (err) {
+    console.error('Init error', err);
+  } finally {
+    hideLoading();
+  }
 })();
