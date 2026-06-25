@@ -291,28 +291,25 @@ function updateLegend({ title, start, end, min, max } = {}) {
 function createChoroplethLayer(columnName, startColor, endColor) {
   const vals = [];
   
+  // 1. Ambil semua nilai yang valid untuk menentukan batas min & max
   for (const f of combinedProvFeatures) {
     const code = f.properties?.Code;
     const row = provDataMap[code];
-    // Filter nilai 0 atau negatif jika ingin pakai logaritma, 
-    // tapi karena data statistik BPS umumnya positif, kita bisa pakai max(v, 1)
     if (row && typeof row[columnName] === 'number') {
-      vals.push(Math.max(row[columnName], 1)); // Hindari log(0)
+      vals.push(row[columnName]);
     }
   }
   
   if (vals.length === 0) return null;
-  
-  // Hitung nilai min dan max dari logaritma datanya
-  const minLog = Math.log(Math.min(...vals));
-  const maxLog = Math.log(Math.max(...vals));
 
-  // Fungsi penentuan warna berbasis logaritma
+  // 2. Tentukan min dan max secara eksplisit
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+
+  // 3. Fungsi penentu warna dengan penanganan jika min === max
   const getColor = v => {
-    const safeV = Math.max(v, 1);
-    const logV = Math.log(safeV);
-    // Jika minLog dan maxLog sama (datanya identik semua), cegah pembagian dengan nol
-    const ratio = (maxLog - minLog) === 0 ? 0 : (logV - minLog) / (maxLog - minLog);
+    if (max === min) return interpolateColor(startColor, endColor, 0);
+    const ratio = (v - min) / (max - min);
     return interpolateColor(startColor, endColor, ratio);
   };
 
@@ -324,18 +321,18 @@ function createChoroplethLayer(columnName, startColor, endColor) {
         fillColor: (v != null && !isNaN(v)) ? getColor(v) : '#ccc', 
         color: 'white', 
         weight: 1, 
-        fillOpacity: 1 
+        fillOpacity: 0.8 // Sedikit transparan agar peta dasar tetap terlihat
       };
     },
-    
     onEachFeature: (feature, layer) => {
       const code = feature.properties?.Code;
       const val = provDataMap[code]?.[columnName];
       const displayVal = val != null ? formatNumber(val) : 'N/A';
-      layer.bindTooltip(`${feature.properties.Name}<br>${columnName}: ${displayVal}`, { direction: 'top', offset: [0, -4], className: 'prov-tooltip' });
+      layer.bindTooltip(`${feature.properties.Name}<br>${columnName}: ${displayVal}`, { direction: 'top', offset: [0, -4] });
     }
   });
 
+  // Simpan meta untuk legenda
   geoJson._choroplethMeta = { columnName, startColor, endColor, min, max };
   return geoJson;
 }
