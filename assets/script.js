@@ -169,7 +169,7 @@ const provMapping = {
 // --- SINGLE GEOJSON FETCHING ---
 async function loadProvinceBoundaries() {
   // Pastikan path menunjuk ke file GeoJSON lokal Anda
-  const res = await fetch('data/id (1).json'); 
+  const res = await fetch('data/bataswilayah.json'); 
   if (!res.ok) throw new Error('Gagal memuat file batas wilayah (id (1).json)');
   const geojson = await res.json();
   
