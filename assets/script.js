@@ -1,5 +1,5 @@
-// Optimized WebGIS script (Kabupaten layer removed & syntax optimized)
-// Dependencies: Leaflet, PapaParse, turf
+// Optimized WebGIS script (Single GeoJSON File, Kabupaten layer removed, No Turf.js needed)
+// Dependencies: Leaflet, PapaParse
 
 // --- UTILITIES ---
 const byId = id => document.getElementById(id);
@@ -10,7 +10,7 @@ const debounce = (fn, wait = 100) => {
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), wait); };
 };
 
-// Gunakan Intl.NumberFormat asli yang jauh lebih cepat dari .toLocaleString manual
+// Gunakan Intl.NumberFormat asli yang jauh lebih cepat
 const idFormatter = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 });
 
 // Normalize/parse numeric fields efficiently
@@ -20,7 +20,7 @@ function normalizeRowNumbers(row) {
     if (v === '' || v == null) { row[k] = null; continue; }
     if (typeof v === 'number') continue;
     
-    // Coba parsing cepat tanpa regex berat terlebih dahulu
+    // Coba parsing cepat
     const strVal = String(v).trim();
     if (!isNaN(strVal)) {
       row[k] = Number(strVal);
@@ -78,7 +78,6 @@ function interpolateColor(hex1, hex2, ratio) {
 
 // --- MAP SETUP ---
 const provDataMap = {}; 
-const cacheProv = {};
 const tooltipLayerGroup = L.layerGroup(); 
 let topTooltipPaneCreated = false;
 
@@ -92,7 +91,7 @@ const map = L.map('map', {
   zoomSnap: 0.1,
   preferCanvas: true,
   zoomDelta: 0.1,
-  layers: [baseCarto]
+  layers: [baseCarto] // Default map
 });
 
 map.createPane('rasterPane').style.zIndex = 200;
@@ -128,70 +127,79 @@ legendNTL.onAdd = function () {
 };
 legendNTL.addTo(map);
 
-// --- GEOJSON FETCHING ---
-const provCodes = [11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51, 52, 53, 61, 62, 63, 64, 65, 71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96];
+// --- MAPPING GEOJSON STRING ID TO BPS NUMERIC ID ---
+// Dictionary ini mengubungkan ID dari file id (1).json ke ID administratif di data_SEM.csv
+const provMapping = {
+    "IDAC": { code: 11, name: "Aceh" },
+    "IDSU": { code: 12, name: "Sumatera Utara" },
+    "IDSB": { code: 13, name: "Sumatera Barat" },
+    "IDRI": { code: 14, name: "Riau" },
+    "IDJA": { code: 15, name: "Jambi" },
+    "IDSS": { code: 16, name: "Sumatera Selatan" },
+    "IDBE": { code: 17, name: "Bengkulu" },
+    "IDLA": { code: 18, name: "Lampung" },
+    "IDBB": { code: 19, name: "Bangka-Belitung" },
+    "IDKR": { code: 21, name: "Kepulauan Riau" },
+    "IDJK": { code: 31, name: "DKI Jakarta" },
+    "IDJB": { code: 32, name: "Jawa Barat" },
+    "IDJT": { code: 33, name: "Jawa Tengah" },
+    "IDYO": { code: 34, name: "DI Yogyakarta" },
+    "IDJI": { code: 35, name: "Jawa Timur" },
+    "IDBT": { code: 36, name: "Banten" },
+    "IDBA": { code: 51, name: "Bali" },
+    "IDNB": { code: 52, name: "Nusa Tenggara Barat" },
+    "IDNT": { code: 53, name: "Nusa Tenggara Timur" },
+    "IDKB": { code: 61, name: "Kalimantan Barat" },
+    "IDKT": { code: 62, name: "Kalimantan Tengah" },
+    "IDKS": { code: 63, name: "Kalimantan Selatan" },
+    "IDKI": { code: 64, name: "Kalimantan Timur" },
+    "IDKU": { code: 65, name: "Kalimantan Utara" },
+    "IDSA": { code: 71, name: "Sulawesi Utara" },
+    "IDST": { code: 72, name: "Sulawesi Tengah" },
+    "IDSN": { code: 73, name: "Sulawesi Selatan" },
+    "IDSG": { code: 74, name: "Sulawesi Tenggara" },
+    "IDGO": { code: 75, name: "Gorontalo" },
+    "IDSR": { code: 76, name: "Sulawesi Barat" },
+    "IDMA": { code: 81, name: "Maluku" },
+    "IDMU": { code: 82, name: "Maluku Utara" },
+    "IDPA": { code: 91, name: "Papua" },
+    "IDPB": { code: 92, name: "Papua Barat" }
+};
 
-async function fetchProvGeoJSON(code) {
-  if (cacheProv[code]) return cacheProv[code];
-  try {
-    const res = await fetch(`https://whatsproject.my.id/geo/v1/prov/${code}/map`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const geo = json.provFeature?.provFeature || json.provFeature || json;
-    
-    if (geo && geo.type === 'FeatureCollection') {
-      cacheProv[code] = { code, geo };
-      return cacheProv[code];
-    }
-  } catch (e) { 
-    console.warn('Gagal memuat provinsi', code, e); 
-  }
-  return null;
-}
-
-// --- MERGE / UNION (GROUPED PROVINCES) ---
-const mergeProvCodes = { 92: [92, 96], 91: [91, 93, 94, 95] };
-
-async function mergeProvincesUnion(codes) {
-  const results = await Promise.all(codes.map(fetchProvGeoJSON));
-  const merged = {};
-  const mergedProps = {};
-
-  for (const item of results) {
-    if (!item) continue;
-    const code = item.code;
-    let target = code;
-    
-    for (const key in mergeProvCodes) {
-      if (mergeProvCodes[key].includes(code)) { target = Number(key); break; }
-    }
-    
-    for (const f of item.geo.features) {
-      merged[target] = merged[target] ? turf.union(merged[target], f) : f;
-    }
-    
-    if (!mergedProps[target]) {
-      const f0 = item.geo.features[0];
-      mergedProps[target] = { ...f0.properties, Code: target, Name: f0.properties.Name };
-    }
-  }
-
-  // Clear cache & rewrite with merged data
-  for (const k in cacheProv) delete cacheProv[k];
+// --- SINGLE GEOJSON FETCHING ---
+async function loadProvinceBoundaries() {
+  // Pastikan path menunjuk ke file GeoJSON lokal Anda
+  const res = await fetch('data/id (1).json'); 
+  if (!res.ok) throw new Error('Gagal memuat file batas wilayah (id (1).json)');
+  const geojson = await res.json();
   
-  const mergedFeatures = [];
-  for (const [codeStr, feat] of Object.entries(merged)) {
-    const code = Number(codeStr);
-    feat.properties = { ...feat.properties, ...mergedProps[code] };
-    const fc = { type: 'FeatureCollection', features: [feat] };
-    cacheProv[code] = { code, geo: fc };
-    mergedFeatures.push({ code, geo: fc });
-  }
-  return mergedFeatures;
+  geojson.features.forEach(feature => {
+     let matchedProv = null;
+     
+     // Pencarian otomatis ID di dalam properti geojson
+     for (const key in feature.properties) {
+        const val = feature.properties[key];
+        if (typeof val === 'string' && provMapping[val]) {
+            matchedProv = provMapping[val];
+            break;
+        }
+     }
+     
+     if (matchedProv) {
+         // Tanamkan Code (Numerik BPS) dan Nama ke dalam properti agar dibaca Choropleth
+         feature.properties.Code = matchedProv.code; 
+         feature.properties.Name = matchedProv.name; 
+         
+         addProvinceLayer({ 
+            code: matchedProv.code, 
+            geo: { type: 'FeatureCollection', features: [feature] } 
+         });
+     }
+  });
 }
 
 // --- PROVINCE LAYERS & TOOLTIPS ---
-let combinedProvFeatures = [];
+let combinedProvFeatures = []; // Untuk kalkulasi Choropleth
 
 function addProvinceLayer({ code, geo }) {
   const defaultStyle = { color: '#00bfff', weight: 1, fillOpacity: 0 };
@@ -234,7 +242,8 @@ function addProvinceLayer({ code, geo }) {
   layer.on('dblclick', e => {
     L.DomEvent.stopPropagation(e);
     L.DomEvent.preventDefault(e);
-    map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 9 });
+    // Klik ganda sekarang hanya men-zoom in mulus tanpa memuat data kabupaten
+    map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 8 });
   });
 
   combinedProvFeatures.push(...geo.features);
@@ -282,7 +291,6 @@ function updateLegend({ title, start, end, min, max } = {}) {
 function createChoroplethLayer(columnName, startColor, endColor) {
   const vals = [];
   
-  // Extract values optimally
   for (const f of combinedProvFeatures) {
     const code = f.properties?.Code;
     const row = provDataMap[code];
@@ -332,15 +340,17 @@ map.on('overlayremove', e => {
 (async function init() {
   showLoading();
   try {
-    // Hanya memuat data Provinsi
+    // 1. Muat data CSV terlebih dahulu
     await loadCSVToMap('data/data_SEM.csv', 'idProv', provDataMap);
 
-    const merged = await mergeProvincesUnion(provCodes);
-    merged.forEach(addProvinceLayer);
+    // 2. Muat satu file GeoJSON (Peta Administrasi) dan render
+    await loadProvinceBoundaries();
 
+    // Setup tooltip layer
     tooltipLayerGroup.addTo(map);
     updateTooltipVisibility();
 
+    // 3. Bangun layer Choropleth otomatis dari CSV
     const sampleRow = Object.values(provDataMap)[0];
     if (sampleRow) {
       const columns = Object.keys(sampleRow).filter(k => !['idProv', 'Nama_Prov'].includes(k));
@@ -353,6 +363,7 @@ map.on('overlayremove', e => {
       });
     }
 
+    // Tampilkan Control Panel Layer Leaflet
     L.control.layers(baseLayers, overlays, { collapsed: true }).addTo(map);
 
   } catch (err) {
