@@ -294,15 +294,27 @@ function createChoroplethLayer(columnName, startColor, endColor) {
   for (const f of combinedProvFeatures) {
     const code = f.properties?.Code;
     const row = provDataMap[code];
+    // Filter nilai 0 atau negatif jika ingin pakai logaritma, 
+    // tapi karena data statistik BPS umumnya positif, kita bisa pakai max(v, 1)
     if (row && typeof row[columnName] === 'number') {
-      vals.push(row[columnName]);
+      vals.push(Math.max(row[columnName], 1)); // Hindari log(0)
     }
   }
   
   if (vals.length === 0) return null;
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const getColor = v => interpolateColor(startColor, endColor, (v - min) / (max - min));
+  
+  // Hitung nilai min dan max dari logaritma datanya
+  const minLog = Math.log(Math.min(...vals));
+  const maxLog = Math.log(Math.max(...vals));
+
+  // Fungsi penentuan warna berbasis logaritma
+  const getColor = v => {
+    const safeV = Math.max(v, 1);
+    const logV = Math.log(safeV);
+    // Jika minLog dan maxLog sama (datanya identik semua), cegah pembagian dengan nol
+    const ratio = (maxLog - minLog) === 0 ? 0 : (logV - minLog) / (maxLog - minLog);
+    return interpolateColor(startColor, endColor, ratio);
+  };
 
   const geoJson = L.geoJSON({ type: 'FeatureCollection', features: combinedProvFeatures }, {
     style: feature => {
@@ -315,6 +327,7 @@ function createChoroplethLayer(columnName, startColor, endColor) {
         fillOpacity: 1 
       };
     },
+    
     onEachFeature: (feature, layer) => {
       const code = feature.properties?.Code;
       const val = provDataMap[code]?.[columnName];
