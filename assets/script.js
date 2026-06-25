@@ -240,12 +240,14 @@ function addProvinceLayer({ code, geo }) {
     <div style="font-family:Segoe UI, sans-serif; font-size:13px; color:#333">
       <div style="font-weight:600; font-size:14px; margin-bottom:6px">${name}</div>
       <table style="width:100%; border-collapse:collapse">
-        <tr><td>PDRB (dalam ribuan)</td><td style="text-align:right">${formatNumber(csvData["PDRB (dalam ribuan)"])}</td></tr>
+        <tr><td>Laju Pertumbuhan PDRB Atas Dasar Harga Konstan</td><td style="text-align:right">${formatNumber(csvData["Laju Pertumbuhan PDRB Atas Dasar Harga Konstan"])}</td></tr>
         <tr><td>Non Performing Loan</td><td style="text-align:right">${formatNumber(csvData["Non Perform Loan (persen)"],2)}</td></tr>
         <tr><td>Jumlah BPR/S</td><td style="text-align:right">${formatNumber(csvData["Jumlah BPR/S"])}</td></tr>
-        <tr><td>Usaha Menengah</td><td style="text-align:right">${formatNumber(csvData["Jumlah Usaha Menengah"])}</td></tr>
-        <tr><td>Usaha Kecil</td><td style="text-align:right">${formatNumber(csvData["Jumlah Usaha Kecil"])}</td></tr>
-        <tr><td>Penetrasi Internet</td><td style="text-align:right">${formatNumber(csvData["Tingkat Penetrasi Internet (Persen)"],2)}</td></tr>
+        <tr><td>Industri Mikro</td><td style="text-align:right">${formatNumber(csvData["Jumlah Perusahaan Industri Skala
+Mikro"])}</td></tr>
+        <tr><td>Industri Kecil</td><td style="text-align:right">${formatNumber(csvData["Jumlah Perusahaan Industri Skala
+Kecil"])}</td></tr>
+        <tr><td>Penetrasi Internet</td><td style="text-align:right">${formatNumber(csvData["Tingkat Penetrasi Internet"],2)}</td></tr>
       </table>
     </div>
   ` : `<b>${name}</b><br><i>Data CSV tidak tersedia</i>`;
