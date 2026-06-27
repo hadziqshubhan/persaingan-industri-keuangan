@@ -310,7 +310,7 @@ function updateLegend({ columnName, startColor, endColor, min, max } = {}) {
 function createChoroplethLayer(columnName, startColor, endColor) {
   const vals = [];
   
-  // 1. Ambil semua nilai yang valid untuk menentukan batas min & max
+  // 1. Ambil semua nilai yang valid
   for (const f of combinedProvFeatures) {
     const code = f.properties?.Code;
     const row = provDataMap[code];
@@ -321,15 +321,21 @@ function createChoroplethLayer(columnName, startColor, endColor) {
   
   if (vals.length === 0) return null;
 
+  // 2. Tentukan min dan max SECARA LINEAR TERLEBIH DAHULU (Jangan dihapus)
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+
+  // 3. BARU LAKUKAN TRANSFORMASI LOGARITMA DI SINI
   const safeMin = Math.max(min, 1);
   const logMin = Math.log(safeMin);
   const logMax = Math.log(Math.max(max, safeMin + 1)); 
-  
+
+  // 4. Fungsi penentu warna
   const getColor = v => {
     if (max === min || v <= 0) return interpolateColor(startColor, endColor, 0);
     const ratio = (Math.log(v) - logMin) / (logMax - logMin);
-    return Math.max(0, Math.min(1, ratio)); // Pastikan rasio tetap di antara 0 dan 1
-    return interpolateColor(startColor, endColor, ratio);
+    const safeRatio = Math.max(0, Math.min(1, ratio)); // Menjaga rasio agar tidak bocor
+    return interpolateColor(startColor, endColor, safeRatio);
   };
 
   const geoJson = L.geoJSON({ type: 'FeatureCollection', features: combinedProvFeatures }, {
@@ -340,7 +346,7 @@ function createChoroplethLayer(columnName, startColor, endColor) {
         fillColor: (v != null && !isNaN(v)) ? getColor(v) : '#ccc', 
         color: 'white', 
         weight: 1, 
-        fillOpacity: 1 // Sedikit transparan agar peta dasar tetap terlihat
+        fillOpacity: 1 // Warna solid (tidak transparan)
       };
     },
     onEachFeature: (feature, layer) => {
@@ -351,7 +357,7 @@ function createChoroplethLayer(columnName, startColor, endColor) {
     }
   });
 
-  // Simpan meta untuk legenda
+  // 5. Simpan meta untuk merender legenda
   geoJson._choroplethMeta = { columnName, startColor, endColor, min, max };
   return geoJson;
 }
