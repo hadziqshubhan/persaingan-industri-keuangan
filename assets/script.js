@@ -275,14 +275,12 @@ legendControl.onAdd = () => legendDiv;
 legendControl.addTo(map);
 
 function updateLegend(meta) {
-  // PERBAIKAN: Cek apakah meta bernilai null/undefined atau tidak memiliki columnName
   if (!meta || !meta.columnName) { 
     legendDiv.innerHTML = ''; 
-    legendDiv.style.display = 'none'; // Sembunyikan kontainer legenda
+    legendDiv.style.display = 'none'; // Sembunyikan jika kosong
     return; 
   }
 
-  // Tampilkan kembali kotak legenda jika ada layer yang aktif
   legendDiv.style.display = 'block';
 
   // Pecah data meta setelah dipastikan aman (bukan null)
@@ -362,9 +360,17 @@ function createChoroplethLayer(columnName, startColor, endColor) {
   return geoJson;
 }
 
-map.on('overlayadd', e => {
-  if (e.layer?._choroplethMeta) {
+// 1. Tangkap setiap layer choropleth yang masuk ke peta
+map.on('layeradd', e => {
+  if (e.layer && e.layer._choroplethMeta) {
     updateLegend(e.layer._choroplethMeta);
+  }
+});
+
+// 2. Tangkap saat pengguna memilih opsi peta kosong
+map.on('baselayerchange', e => {
+  if (e.name === "Tidak Ada Choropleth") {
+    updateLegend(null);
   }
 });
 
