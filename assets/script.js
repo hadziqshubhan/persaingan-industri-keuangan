@@ -274,30 +274,30 @@ const legendControl = L.control({ position: 'bottomright' });
 legendControl.onAdd = () => legendDiv;
 legendControl.addTo(map);
 
-function updateLegend({ columnName, startColor, endColor, min, max } = {}) {
-  // Jika tidak ada data layer, kosongkan dan sembunyikan kotak legenda
-  if (!columnName) { 
+function updateLegend(meta) {
+  // PERBAIKAN: Cek apakah meta bernilai null/undefined atau tidak memiliki columnName
+  if (!meta || !meta.columnName) { 
     legendDiv.innerHTML = ''; 
-    legendDiv.style.display = 'none'; 
+    legendDiv.style.display = 'none'; // Sembunyikan kontainer legenda
     return; 
   }
 
-  // Tampilkan kembali kotak legenda ketika layer aktif
+  // Tampilkan kembali kotak legenda jika ada layer yang aktif
   legendDiv.style.display = 'block';
 
+  // Pecah data meta setelah dipastikan aman (bukan null)
+  const { columnName, startColor, endColor, min, max } = meta;
   const steps = 4;
   let html = `<strong>${columnName}</strong><br/>`;
   
   const safeMin = Math.max(min, 1);
   const logMin = Math.log(safeMin);
   const logMax = Math.log(Math.max(max, safeMin + 1));
-  
+
   for (let i = 0; i < steps; i++) {
-    // Hitung rentang dalam skala log
     const currentLog = logMin + i * (logMax - logMin) / steps;
     const nextLog = logMin + (i + 1) * (logMax - logMin) / steps;
     
-    // Kembalikan ke angka asli (eksponensial) untuk ditampilkan di legenda
     const currentVal = Math.exp(currentLog);
     const nextVal = Math.exp(nextLog);
     
@@ -367,10 +367,12 @@ map.on('overlayadd', e => {
     updateLegend(e.layer._choroplethMeta);
   }
 });
-map.on('overlayremove', e => {
-  if (e.layer?._choroplethMeta) updateLegend(null);
-});
 
+map.on('overlayremove', e => {
+  if (e.layer?._choroplethMeta) {
+    updateLegend(null); // Sekarang mengirim null sudah aman dan akan menyembunyikan legenda
+  }
+});
 // --- MAIN BOOTSTRAP ---
 (async function init() {
   showLoading();
