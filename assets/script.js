@@ -374,20 +374,26 @@ map.on('overlayremove', e => {
   }
 });
 // --- MAIN BOOTSTRAP ---
+// --- MAIN BOOTSTRAP ---
 (async function init() {
   showLoading();
   try {
-    // 1. Muat data CSV terlebih dahulu
+    // 1. Muat data CSV
     await loadCSVToMap('data/data_SEM.csv', 'idProv', provDataMap);
 
-    // 2. Muat satu file GeoJSON (Peta Administrasi) dan render
+    // 2. Muat file GeoJSON
     await loadProvinceBoundaries();
 
     // Setup tooltip layer
     tooltipLayerGroup.addTo(map);
     updateTooltipVisibility();
 
-    // 3. Bangun layer Choropleth otomatis dari CSV
+    // 3. Siapkan objek untuk menampung layer Choropleth
+    const choroplethRadio = {
+      "Tidak Ada Choropleth": L.layerGroup() 
+    };
+
+    // 4. Bangun layer Choropleth otomatis dari CSV
     const sampleRow = Object.values(provDataMap)[0];
     if (sampleRow) {
       const columns = Object.keys(sampleRow).filter(k => !['idProv', 'Nama_Prov'].includes(k));
@@ -395,13 +401,23 @@ map.on('overlayremove', e => {
         const [start, end] = colorPalettes[i % colorPalettes.length];
         const layer = createChoroplethLayer(col, start, end);
         if (layer) {
-          overlays[`Choropleth: ${col}`] = layer;
+          choroplethRadio[`${col}`] = layer; 
         }
       });
     }
 
-    // Tampilkan Control Panel Layer Leaflet
-    L.control.layers(baseLayers, overlays, { collapsed: true }).addTo(map);
+    // 5. TAMPILKAN DUA CONTROL LAYER SECARA TERPISAH
+    // Control 1: Khusus untuk Peta Dasar (Basemaps)
+    L.control.layers(baseLayers, null, { collapsed: true, position: 'topright' }).addTo(map);
+
+    // Control 2: Khusus untuk Data Choropleth
+    L.control.layers(choroplethRadio, null, { collapsed: false, position: 'topright' }).addTo(map);
+
+    // Aktifkan layer choropleth pertama secara default agar peta tidak kosong
+    const firstChoroplethKey = Object.keys(choroplethRadio)[1];
+    if (firstChoroplethKey) {
+      choroplethRadio[firstChoroplethKey].addTo(map);
+    }
 
   } catch (err) {
     console.error('Init error:', err);
