@@ -269,20 +269,39 @@ const colorPalettes = [
 ];
 
 const legendDiv = L.DomUtil.create('div', 'legend-choropleth');
-legendDiv.style.cssText = 'background: rgba(255,255,255,0.95); padding: 8px 10px; border-radius: 8px; font-size: 13px; box-shadow: 0 0 8px rgba(0,0,0,0.15);';
+legendDiv.style.cssText = 'display: none; background: rgba(255,255,255,0.95); padding: 8px 10px; border-radius: 8px; font-size: 13px; box-shadow: 0 0 8px rgba(0,0,0,0.15);';
 const legendControl = L.control({ position: 'bottomright' });
 legendControl.onAdd = () => legendDiv;
 legendControl.addTo(map);
 
-function updateLegend({ title, start, end, min, max } = {}) {
-  if (!title) { legendDiv.innerHTML = ''; return; }
+function updateLegend({ columnName, startColor, endColor, min, max } = {}) {
+  // Jika tidak ada data layer, kosongkan dan sembunyikan kotak legenda
+  if (!columnName) { 
+    legendDiv.innerHTML = ''; 
+    legendDiv.style.display = 'none'; 
+    return; 
+  }
+
+  // Tampilkan kembali kotak legenda ketika layer aktif
+  legendDiv.style.display = 'block';
+
   const steps = 4;
-  let html = `<strong>${title}</strong><br/>`;
+  let html = `<strong>${columnName}</strong><br/>`;
+  
+  const safeMin = Math.max(min, 1);
+  const logMin = Math.log(safeMin);
+  const logMax = Math.log(Math.max(max, safeMin + 1));
   
   for (let i = 0; i < steps; i++) {
-    const currentVal = min + i * (max - min) / steps;
-    const nextVal = min + (i + 1) * (max - min) / steps;
-    const c = interpolateColor(start, end, i / (steps - 1 || 1));
+    // Hitung rentang dalam skala log
+    const currentLog = logMin + i * (logMax - logMin) / steps;
+    const nextLog = logMin + (i + 1) * (logMax - logMin) / steps;
+    
+    // Kembalikan ke angka asli (eksponensial) untuk ditampilkan di legenda
+    const currentVal = Math.exp(currentLog);
+    const nextVal = Math.exp(nextLog);
+    
+    const c = interpolateColor(startColor, endColor, i / (steps - 1 || 1));
     html += `<i style="background:${c};width:20px;height:10px;display:inline-block;margin-right:6px;"></i> ${formatNumber(currentVal)} – ${formatNumber(nextVal)}<br/>`;
   }
   legendDiv.innerHTML = html;
@@ -302,14 +321,14 @@ function createChoroplethLayer(columnName, startColor, endColor) {
   
   if (vals.length === 0) return null;
 
-  // 2. Tentukan min dan max secara eksplisit
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-
-  // 3. Fungsi penentu warna dengan penanganan jika min === max
+  const safeMin = Math.max(min, 1);
+  const logMin = Math.log(safeMin);
+  const logMax = Math.log(Math.max(max, safeMin + 1)); 
+  
   const getColor = v => {
-    if (max === min) return interpolateColor(startColor, endColor, 0);
-    const ratio = (v - min) / (max - min);
+    if (max === min || v <= 0) return interpolateColor(startColor, endColor, 0);
+    const ratio = (Math.log(v) - logMin) / (logMax - logMin);
+    return Math.max(0, Math.min(1, ratio)); // Pastikan rasio tetap di antara 0 dan 1
     return interpolateColor(startColor, endColor, ratio);
   };
 
@@ -321,7 +340,7 @@ function createChoroplethLayer(columnName, startColor, endColor) {
         fillColor: (v != null && !isNaN(v)) ? getColor(v) : '#ccc', 
         color: 'white', 
         weight: 1, 
-        fillOpacity: 0.8 // Sedikit transparan agar peta dasar tetap terlihat
+        fillOpacity: 1 // Sedikit transparan agar peta dasar tetap terlihat
       };
     },
     onEachFeature: (feature, layer) => {
